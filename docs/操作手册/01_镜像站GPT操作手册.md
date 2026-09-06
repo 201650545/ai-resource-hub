@@ -73,7 +73,7 @@ opencli browser <session> eval $js2
 ## 5. 发送 + 监控完成
 
 - 发送：`eval` 点 `[data-testid=send-button]`。
-- **生成状态判定**（后台轮询，每 10s 一次）：
+- **生成状态判定**（后台轮询，每 10s 一次，直接复用 `scripts/poll-gpt.ps1` 即可，本段留作判定原理）：
   ```js
   (()=>{const gen=document.querySelector('[data-testid=stop-button],button[aria-label*=Stop]');
         const msgs=document.querySelectorAll('[data-message-author-role]');
@@ -81,7 +81,7 @@ opencli browser <session> eval $js2
   ```
   - `stop:true` = 生成中（Thinking·Extended 思考阶段较长，user 消息先出现、assistant 后渲染）
   - `stop:false` 且 `roles>=2`（出现 assistant）= 生成完成
-- 提取回复：`extract` 拿整页 content，或遍历 `[data-message-author-role=assistant]` 取文本。
+- **完成即提取，不 sleep 固定时长**：循环以上判定直到完成（或用 §8.2 的轮询脚本每 10s 监管、连续 2 次长度稳定即提取全部 assistant 内容），避免空等 90-120 秒。
 
 ## 6. 落档
 
@@ -189,7 +189,12 @@ $b = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($c))
 (()=>{const msgs=document.querySelectorAll('[data-message-author-role=assistant]');const last=msgs[msgs.length-1];return last?(last.innerText||last.textContent||'').trim():''})()
 ```
 - **空回复判定**：assistant 长度 0 或只有 "Show more" + 引用标记（GitHub +N）= 空回复（Deep Research 触发）→ 换内嵌版提示词重试，或转 Claude。
-- **推荐流程**：发送后直接 sleep 90-120 秒（Thinking•Extended 通常 2-5 分钟），再提取；若 0 字再等再试，不用复杂轮询。
+- **推荐流程（每 10 秒监管，完成即提取，不再 sleep 固定时长）**：发送后调用 `scripts/poll-gpt.ps1 <会话名>`，脚本每 10 秒探测一次 `stop` 状态与 assistant 长度；**stop 消失 + assistant 连续 2 次长度稳定**即判定完成并自动提取全部 assistant 内容到输出文件。默认上限 300s（Thinking•Extended 通常 2-5 分钟），超时自动兜底提取当前已生成内容，不空等、不无限挂起。
+  ```powershell
+  node .\scripts\poll.mjs gwasksess 300 "D:\...\答复.md"   # 或 .\scripts\poll-gpt.ps1 gwasksess -MaxWait 300 -Out "D:\...\答复.md"
+  ```
+  三步判定逻辑：① `stop=false` 且出现 assistant → 已生成主体；② 长度连续 2 次轮询不增长 → 流式输出结束；③ 若还是 0 字 → 空回复，走下方兜底逻辑。
+  > ✅ **已验证（2026-09-05）**：`poll.mjs` 脚本真实链路跑通——发送问题后 `stop=true`（生成中）→ `stop=false`（完成），脚本在约 23s 判定完成并全量提取 5 条 assistant 消息落盘，exit 0。
 
 ### 8.3 opencli eval 传参引号规则（沿用 + 补充）
 
